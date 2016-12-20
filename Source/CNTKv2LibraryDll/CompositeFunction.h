@@ -83,9 +83,16 @@ namespace CNTK
                               const std::unordered_map<Variable, ValuePtr>& rootGradientValues,
                               std::unordered_map<Variable, ValuePtr>& backPropagatedGradientValuesForInputs) override;
 
-        virtual Dictionary Serialize() const override;
+        Dictionary SerializeBlockComposite() const;
 
+        virtual Dictionary Serialize() const override;
+        
         virtual size_t CurrentVersion() const override { return s_serializationVersion; }
+
+        static FunctionPtr DeserializeBlockComposite(const Dictionary& dict,
+                                                     const std::unordered_set<FunctionPtr>& allPrimitiveFunctions,
+                                                     const std::unordered_map<Variable, Variable>& allPlaceholderReplacements,
+                                                     const CNTK::DeviceDescriptor& device);
 
         static FunctionPtr Deserialize(const Dictionary& dictionary, const CNTK::DeviceDescriptor& device);
 
@@ -120,9 +127,27 @@ namespace CNTK
         }
 
     private:
-        virtual void ReplacePlaceholdersInPlace(const std::unordered_map<Variable, Variable>& placeholderReplacements,
-                                                std::unordered_set<const Function*>& visitedFunctions,
-                                                std::unordered_set<Variable>& replacedPlaceholders) override;
+        // Replace any PlaceHolder Variables in the graph of Functions underlying 'this' CompositeFunction. All PlaceHolder variables
+        // should have been replaced before performing any Forward compute of 'this' Function.
+        virtual void OnPlaceholdersReplaced(const std::unordered_map<Variable, Variable>& placeholderReplacements,
+                                            std::unordered_set<Variable>& replacedPlaceholders) override
+        {
+            // If any of the placeholders were replaced with Output variables, let's add the graph of function underneath 
+            // each of those to 'm_allPrimitiveFunctions' set
+            for (auto replacedPlaceholder : replacedPlaceholders)
+            {
+                auto replacingVariable = placeholderReplacements.at(replacedPlaceholder);
+                if (replacingVariable.IsOutput())
+                {
+                    auto ownerFunc = replacingVariable.Owner();
+                    std::unordered_set<FunctionPtr> visitedFunctions2;
+                    Collect(ownerFunc, visitedFunctions2);
+
+                    // Add the newly visited functions to 'm_allPrimitiveFunctions' set
+                    m_allPrimitiveFunctions.insert(visitedFunctions2.begin(), visitedFunctions2.end());
+                }
+            }
+        }
 
         CompositeFunction(const FunctionPtr& rootFunction, std::unordered_set<FunctionPtr>&& allPrimitiveFunctions, const std::wstring& name, const std::wstring& uid = Internal::GenerateUid(L"CompositeFunction"))
             : Function({}, rootFunction->Outputs(), Dictionary(), rootFunction, name, uid),
